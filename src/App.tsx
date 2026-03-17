@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { io, Socket } from 'socket.io-client';
-import { Search, TrendingUp, TrendingDown, Zap, Activity, BarChart3, Clock, Volume2, VolumeX } from 'lucide-react';
+import { Search, TrendingUp, TrendingDown, Zap, Activity, BarChart3, Clock, Volume2, VolumeX, Pin } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 interface MarketData {
@@ -27,8 +27,42 @@ const App: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isVoiceEnabled, setIsVoiceEnabled] = useState(false);
+  const [pairOffsets, setPairOffsets] = useState<Record<string, number>>(() => {
+    const saved = localStorage.getItem('pairOffsets');
+    return saved ? JSON.parse(saved) : {};
+  });
 
   const [countdown, setCountdown] = useState(60);
+  const [pinnedPairs, setPinnedPairs] = useState<string[]>(() => {
+    const saved = localStorage.getItem('pinnedPairs');
+    return saved ? JSON.parse(saved) : [];
+  });
+
+  useEffect(() => {
+    localStorage.setItem('pinnedPairs', JSON.stringify(pinnedPairs));
+  }, [pinnedPairs]);
+
+  useEffect(() => {
+    localStorage.setItem('pairOffsets', JSON.stringify(pairOffsets));
+  }, [pairOffsets]);
+
+  const setPairOffset = (pair: string, realPrice: number) => {
+    const currentPrice = marketData[pair]?.price || 0;
+    if (currentPrice === 0) return;
+    const offset = realPrice - currentPrice;
+    setPairOffsets(prev => ({ ...prev, [pair]: offset }));
+  };
+
+  const resetAllOffsets = () => {
+    setPairOffsets({});
+  };
+
+  const togglePin = (pair: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setPinnedPairs(prev => 
+      prev.includes(pair) ? prev.filter(p => p !== pair) : [...prev, pair]
+    );
+  };
 
   const speakSignal = (pair: string, signal: string) => {
     if (!isVoiceEnabled) return;
@@ -100,25 +134,25 @@ const App: React.FC = () => {
 
     // Realistic base prices for OTC pairs to match real market levels
     const BASE_PRICES: Record<string, number> = {
-      'BRLUSD_otc': 0.18779,
-      'PKRUSD_otc': 0.00358,
-      'BDTUSD_otc': 0.00839,
-      'NGNUSD_otc': 0.00062,
-      'MXNUSD_otc': 0.0589,
-      'VNDUSD_otc': 0.0000405,
-      'ARSUSD_otc': 0.00118,
-      'TRYUSD_otc': 0.0308,
-      'INRUSD_otc': 0.01205,
-      'SGDUSD_otc': 0.7430,
-      'EURUSD_otc': 1.0852,
-      'GBPUSD_otc': 1.2642,
-      'USDJPY_otc': 149.52,
-      'AUDUSD_otc': 0.6542,
-      'USDCAD_otc': 1.3522,
-      'BTCUSD_otc': 64500,
-      'ETHUSD_otc': 3450,
-      'Gold_otc': 2150,
-      'Silver_otc': 24.50
+      'BRLUSD_otc': 0.2012,
+      'PKRUSD_otc': 0.0036,
+      'BDTUSD_otc': 0.0091,
+      'NGNUSD_otc': 0.0006,
+      'MXNUSD_otc': 0.0601,
+      'VNDUSD_otc': 0.00004,
+      'ARSUSD_otc': 0.0012,
+      'TRYUSD_otc': 0.0312,
+      'INRUSD_otc': 0.0121,
+      'SGDUSD_otc': 0.7450,
+      'EURUSD_otc': 1.0920,
+      'GBPUSD_otc': 1.2750,
+      'USDJPY_otc': 148.50,
+      'AUDUSD_otc': 0.6620,
+      'USDCAD_otc': 1.3480,
+      'BTCUSD_otc': 68500,
+      'ETHUSD_otc': 3850,
+      'Gold_otc': 2165,
+      'Silver_otc': 25.10
     };
 
     // Unlock UI immediately
@@ -249,10 +283,16 @@ const App: React.FC = () => {
   }, []);
 
   const filteredPairs = useMemo(() => {
-    return Object.keys(marketData).filter(pair => 
-      pair.toLowerCase().includes(searchTerm.toLowerCase())
-    ).sort();
-  }, [marketData, searchTerm]);
+    return Object.keys(marketData)
+      .filter(pair => pair.toLowerCase().includes(searchTerm.toLowerCase()))
+      .sort((a, b) => {
+        const aPinned = pinnedPairs.includes(a);
+        const bPinned = pinnedPairs.includes(b);
+        if (aPinned && !bPinned) return -1;
+        if (!aPinned && bPinned) return 1;
+        return a.localeCompare(b);
+      });
+  }, [marketData, searchTerm, pinnedPairs]);
 
   const handleTrade = (pair: string, signal: string) => {
     const confidence = aiSignals[pair]?.confidence;
@@ -377,7 +417,13 @@ const App: React.FC = () => {
                   onChange={(e) => setSearchTerm(e.target.value)}
                 />
               </div>
-              <div className="flex gap-2 w-full md:w-auto">
+              <div className="flex flex-col md:flex-row gap-4 w-full md:w-auto">
+                 <button 
+                   onClick={resetAllOffsets}
+                   className="px-6 py-4 bg-red-500/10 border border-red-500/20 rounded-2xl text-red-400 text-xs font-bold uppercase tracking-widest hover:bg-red-500/20 transition-all"
+                 >
+                   Reset All Sync
+                 </button>
                  <div className="flex-1 md:flex-none px-6 py-4 bg-slate-900/50 rounded-2xl border border-white/5 flex items-center justify-center gap-3">
                    <Activity size={20} className="text-emerald-400 animate-pulse" />
                    <span className="text-sm font-bold tracking-wide uppercase opacity-70">LIVE FEED</span>
@@ -403,24 +449,42 @@ const App: React.FC = () => {
                       <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-500/5 blur-3xl rounded-full -mr-16 -mt-16 group-hover:bg-indigo-500/10 transition-all" />
                       
                       <div className="flex justify-between items-start mb-6 relative z-10">
-                        <div>
-                          <h3 className="font-black text-xl tracking-tight text-white mb-1">
-                            {pairKey.replace('_otc', '').toUpperCase()}
-                            <span className="text-indigo-500/50 text-sm ml-1">OTC</span>
-                          </h3>
-                          <div className="flex items-center gap-2">
-                            <span className={`text-[10px] px-2 py-0.5 rounded-md font-black tracking-widest uppercase ${
-                              market.direction === '🟢' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'
-                            }`}>
-                              {market.direction === '🟢' ? 'UP' : 'DOWN'}
-                            </span>
-                            <span className="text-[10px] font-bold text-slate-500 tracking-widest uppercase">{market.payout}% PAYOUT</span>
+                        <div className="flex items-start gap-3">
+                          <button 
+                            onClick={(e) => togglePin(pairKey, e)}
+                            className={`mt-1 transition-colors ${pinnedPairs.includes(pairKey) ? 'text-indigo-500' : 'text-slate-600 hover:text-slate-400'}`}
+                          >
+                            <Pin size={18} fill={pinnedPairs.includes(pairKey) ? 'currentColor' : 'none'} />
+                          </button>
+                          <div>
+                            <h3 className="font-black text-xl tracking-tight text-white mb-1">
+                              {pairKey.replace('_otc', '').toUpperCase()}
+                              <span className="text-indigo-500/50 text-sm ml-1">OTC</span>
+                            </h3>
+                            <div className="flex items-center gap-2">
+                              <span className={`text-[10px] px-2 py-0.5 rounded-md font-black tracking-widest uppercase ${
+                                market.direction === '🟢' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'
+                              }`}>
+                                {market.direction === '🟢' ? 'UP' : 'DOWN'}
+                              </span>
+                              <span className="text-[10px] font-bold text-slate-500 tracking-widest uppercase">{market.payout}% PAYOUT</span>
+                            </div>
                           </div>
                         </div>
-                        <div className="text-right">
+                        <div className="text-right flex flex-col items-end gap-2">
                           <div className="text-2xl font-black font-mono text-white tracking-tighter">
-                            {market.price.toFixed(5)}
+                            {(market.price + (pairOffsets[pairKey] || 0)).toFixed(5)}
                           </div>
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const val = prompt(`Enter real price for ${pairKey.replace('_otc', '').toUpperCase()}:`, (market.price + (pairOffsets[pairKey] || 0)).toFixed(5));
+                              if (val) setPairOffset(pairKey, parseFloat(val));
+                            }}
+                            className="text-[10px] font-bold text-indigo-400 hover:text-indigo-300 bg-indigo-500/10 px-2 py-1 rounded-md border border-indigo-500/20"
+                          >
+                            SYNC PRICE
+                          </button>
                         </div>
                       </div>
 
