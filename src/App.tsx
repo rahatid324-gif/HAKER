@@ -32,6 +32,54 @@ const App: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const [countdown, setCountdown] = useState(60);
+
+  const calculateSignal = (candles: any[][]): AISignal => {
+    if (candles.length < 5) return { signal: 'WAIT', confidence: 0, expires: 0, strength: 'LOW' };
+    
+    const last = candles[candles.length - 1];
+    const prev = candles[candles.length - 2];
+    
+    const isBullish = last[4] > last[1];
+    const isBearish = last[4] < last[1];
+    
+    // Simple momentum/RSI logic
+    const gains = candles.slice(-10).filter(c => c[4] > c[1]).length;
+    const losses = candles.slice(-10).filter(c => c[4] < c[1]).length;
+    
+    let signal: '🟢 CALL ↑' | '🔴 PUT ↓' | 'WAIT' = 'WAIT';
+    let confidence = 0;
+    let strength: 'HIGH' | 'MEDIUM' | 'LOW' = 'LOW';
+
+    if (isBullish && gains > losses) {
+      signal = '🟢 CALL ↑';
+      confidence = Math.floor(80 + (gains * 2));
+      strength = gains > 7 ? 'HIGH' : 'MEDIUM';
+    } else if (isBearish && losses > gains) {
+      signal = '🔴 PUT ↓';
+      confidence = Math.floor(80 + (losses * 2));
+      strength = losses > 7 ? 'HIGH' : 'MEDIUM';
+    } else {
+      // Reversal logic
+      if (isBullish && prev[4] < prev[1]) {
+        signal = '🟢 CALL ↑';
+        confidence = 75;
+        strength = 'MEDIUM';
+      } else if (isBearish && prev[4] > prev[1]) {
+        signal = '🔴 PUT ↓';
+        confidence = 75;
+        strength = 'MEDIUM';
+      }
+    }
+
+    return {
+      signal,
+      confidence: Math.min(confidence, 99),
+      expires: Date.now() + 60000,
+      strength
+    };
+  };
+
   const fetchFallbackData = async () => {
     // If already loading or has data, don't run again if not needed
     if (Object.keys(marketData).length > 0 && !isLoading) return;
@@ -92,14 +140,7 @@ const App: React.FC = () => {
                 open: true
               };
               
-              const recent = candles.slice(-10);
-              const momentum = recent.filter(c => c[4] > c[1]).length / 10;
-              const signalInfo = {
-                signal: momentum > 0.6 ? '🟢 CALL ↑' : momentum < 0.4 ? '🔴 PUT ↓' : 'WAIT',
-                confidence: Math.floor(70 + Math.random() * 20),
-                expires: Date.now() + 60000,
-                strength: momentum > 0.6 || momentum < 0.4 ? 'HIGH' : 'MEDIUM'
-              };
+              const signalInfo = calculateSignal(candles);
 
               setMarketData(prev => ({ ...prev, [pair]: marketInfo }));
               setAiSignals(prev => ({ ...prev, [pair]: signalInfo }));
@@ -127,12 +168,7 @@ const App: React.FC = () => {
             open: true
           };
           
-          const signalInfo = {
-            signal: Math.random() > 0.6 ? '🟢 CALL ↑' : Math.random() < 0.4 ? '🔴 PUT ↓' : 'WAIT',
-            confidence: Math.floor(75 + Math.random() * 15),
-            expires: Date.now() + 60000,
-            strength: 'MEDIUM'
-          };
+          const signalInfo = calculateSignal(simulatedCandles);
 
           setMarketData(prev => ({ ...prev, [pair]: marketInfo }));
           setAiSignals(prev => ({ ...prev, [pair]: signalInfo }));
@@ -167,6 +203,7 @@ const App: React.FC = () => {
     });
 
     newSocket.on('live_candle', ({ pair, candles }) => {
+      const signalInfo = calculateSignal(candles);
       setMarketData(prev => ({
         ...prev,
         [pair]: {
@@ -175,6 +212,10 @@ const App: React.FC = () => {
           price: candles[candles.length - 1][4],
           direction: candles[candles.length - 1][4] > candles[candles.length - 2][4] ? '🟢' : '🔴',
         }
+      }));
+      setAiSignals(prev => ({
+        ...prev,
+        [pair]: signalInfo
       }));
     });
 
@@ -277,6 +318,51 @@ const App: React.FC = () => {
   };
 
   useEffect(() => {
+    const interval = setInterval(() => {
+      const now = new Date();
+      const seconds = now.getSeconds();
+      setCountdown(60 - seconds);
+
+      // If countdown just reset and socket is not connected, simulate a new candle
+      if (seconds === 0 && (!socket || !socket.connected)) {
+        setMarketData(prev => {
+          const next = { ...prev };
+          Object.keys(next).forEach(pair => {
+            const candles = [...next[pair].candles];
+            const last = candles[candles.length - 1];
+            
+            // Simulate a new candle based on the last one
+            const time = Math.floor(Date.now() / 1000);
+            const open = last[4];
+            const volatility = open * 0.001;
+            const close = open + (Math.random() - 0.5) * volatility;
+            const high = Math.max(open, close) + Math.random() * (volatility * 0.2);
+            const low = Math.min(open, close) - Math.random() * (volatility * 0.2);
+            
+            candles.push([time, open, high, low, close, 100]);
+            if (candles.length > 100) candles.shift();
+            
+            const signalInfo = calculateSignal(candles);
+            next[pair] = {
+              ...next[pair],
+              candles,
+              price: close,
+              direction: close > open ? '🟢' : '🔴'
+            };
+            
+            setAiSignals(prevSignals => ({
+              ...prevSignals,
+              [pair]: signalInfo
+            }));
+          });
+          return next;
+        });
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [socket, marketData]);
+
+  useEffect(() => {
     if (!selectedPair && Object.keys(marketData).length > 0) {
       setSelectedPair(Object.keys(marketData)[0]);
     }
@@ -296,6 +382,10 @@ const App: React.FC = () => {
             </h1>
           </div>
           <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-indigo-500/10 rounded-full border border-indigo-500/30">
+              <Clock size={14} className="text-indigo-400" />
+              <span className="text-xs font-bold text-indigo-400">NEXT SIGNAL: {countdown}s</span>
+            </div>
             <div className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-slate-800 rounded-full border border-slate-700">
               <Activity size={14} className="text-emerald-400 animate-pulse" />
               <span className="text-xs font-medium text-slate-400">REAL-TIME PRODUCTION FEED</span>
@@ -391,16 +481,21 @@ const App: React.FC = () => {
                         </div>
 
                         {signal && (
-                          <div className={`mt-3 p-3 rounded-xl flex items-center justify-between ${
-                            signal.signal.includes('CALL') ? 'bg-emerald-500/10 text-emerald-400' : 
-                            signal.signal.includes('PUT') ? 'bg-red-500/10 text-red-400' : 'bg-slate-800 text-slate-500'
+                          <div className={`mt-3 p-3 rounded-xl flex items-center justify-between border ${
+                            signal.signal.includes('CALL') ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 
+                            signal.signal.includes('PUT') ? 'bg-red-500/10 border-red-500/20 text-red-400' : 'bg-slate-800 border-slate-700 text-slate-500'
                           }`}>
                             <div className="flex items-center gap-2">
                               {signal.signal.includes('CALL') ? <TrendingUp size={16} /> : 
                                signal.signal.includes('PUT') ? <TrendingDown size={16} /> : <Activity size={16} />}
                               <span className="text-sm font-bold">{signal.signal}</span>
                             </div>
-                            <span className="text-xs font-mono">{signal.confidence}% ACC</span>
+                            <div className="text-right">
+                              <div className="text-[10px] font-bold opacity-60 uppercase tracking-wider">
+                                {countdown < 5 ? 'NEW SIGNAL SOON' : 'CONFIDENCE'}
+                              </div>
+                              <div className="text-sm font-bold font-mono">{signal.confidence}%</div>
+                            </div>
                           </div>
                         )}
                       </motion.div>
