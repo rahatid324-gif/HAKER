@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { createChart, IChartApi, ISeriesApi, CandlestickSeries } from 'lightweight-charts';
-import { Search, TrendingUp, TrendingDown, Zap, Activity, BarChart3, Clock } from 'lucide-react';
+import { Search, TrendingUp, TrendingDown, Zap, Activity, BarChart3, Clock, ChevronDown } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 interface MarketData {
@@ -93,21 +93,21 @@ const App: React.FC = () => {
 
     // Realistic base prices for OTC pairs to match real market levels
     const BASE_PRICES: Record<string, number> = {
-      'BRLUSD_otc': 0.1875,
-      'PKRUSD_otc': 0.0036,
-      'BDTUSD_otc': 0.0084,
-      'NGNUSD_otc': 0.0006,
-      'MXNUSD_otc': 0.059,
-      'VNDUSD_otc': 0.00004,
-      'ARSUSD_otc': 0.0011,
-      'TRYUSD_otc': 0.031,
-      'INRUSD_otc': 0.012,
-      'SGDUSD_otc': 0.74,
-      'EURUSD_otc': 1.0850,
-      'GBPUSD_otc': 1.2640,
-      'USDJPY_otc': 149.50,
-      'AUDUSD_otc': 0.6540,
-      'USDCAD_otc': 1.3520,
+      'BRLUSD_otc': 0.18779,
+      'PKRUSD_otc': 0.00358,
+      'BDTUSD_otc': 0.00839,
+      'NGNUSD_otc': 0.00062,
+      'MXNUSD_otc': 0.0589,
+      'VNDUSD_otc': 0.0000405,
+      'ARSUSD_otc': 0.00118,
+      'TRYUSD_otc': 0.0308,
+      'INRUSD_otc': 0.01205,
+      'SGDUSD_otc': 0.7430,
+      'EURUSD_otc': 1.0852,
+      'GBPUSD_otc': 1.2642,
+      'USDJPY_otc': 149.52,
+      'AUDUSD_otc': 0.6542,
+      'USDCAD_otc': 1.3522,
       'BTCUSD_otc': 64500,
       'ETHUSD_otc': 3450,
       'Gold_otc': 2150,
@@ -412,100 +412,40 @@ const App: React.FC = () => {
           </div>
         ) : (
           <>
-            {/* Search and Stats */}
-            <div className="flex flex-col md:flex-row gap-4 mb-8">
-              <div className="relative flex-1">
-                <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={20} />
+            <div className="flex items-center gap-4">
+              <div className="relative">
+                <select
+                  value={selectedPair || ''}
+                  onChange={(e) => setSelectedPair(e.target.value)}
+                  className="bg-slate-900 border border-slate-800 rounded-xl py-2 pl-4 pr-10 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 appearance-none font-bold text-indigo-400"
+                >
+                  {filteredPairs.map(pair => (
+                    <option key={pair} value={pair}>{pair.replace('_otc', '-OTC')}</option>
+                  ))}
+                </select>
+                <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" size={16} />
+              </div>
+              <div className="relative flex-1 max-w-xs hidden md:block">
+                <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={16} />
                 <input
                   type="text"
-                  placeholder="Search real pairs (e.g. BRL, PKR, BDT...)"
-                  className="w-full bg-slate-900 border border-slate-800 rounded-2xl py-3 pl-12 pr-4 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 transition-all"
+                  placeholder="Search pairs..."
+                  className="w-full bg-slate-900 border border-slate-800 rounded-xl py-2 pl-10 pr-4 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 transition-all text-sm"
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                 />
               </div>
-              <div className="flex gap-2 overflow-x-auto pb-2 md:pb-0">
+              <div className="flex gap-2">
                  <div className="px-4 py-2 bg-slate-900 rounded-xl border border-slate-800 flex items-center gap-2 whitespace-nowrap">
                    <BarChart3 size={16} className="text-indigo-400" />
                    <span className="text-sm">REAL OTC Data</span>
                  </div>
-                 <div className="px-4 py-2 bg-slate-900 rounded-xl border border-slate-800 flex items-center gap-2 whitespace-nowrap">
-                   <Zap size={16} className="text-amber-400" />
-                   <span className="text-sm">RSI + EMA AI Active</span>
-                 </div>
               </div>
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-              {/* Market List */}
-              <div className="lg:col-span-1 space-y-4 max-h-[calc(100vh-250px)] overflow-y-auto pr-2 custom-scrollbar">
-                <AnimatePresence mode="popLayout">
-                  {filteredPairs.map((pairKey) => {
-                    const market = marketData[pairKey];
-                    const signal = aiSignals[pairKey];
-                    const isSelected = selectedPair === pairKey;
-
-                    return (
-                      <motion.div
-                        key={pairKey}
-                        layout
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, scale: 0.95 }}
-                        onClick={() => setSelectedPair(pairKey)}
-                        className={`p-4 rounded-2xl border transition-all cursor-pointer group ${
-                          isSelected 
-                            ? 'bg-indigo-600/10 border-indigo-500 shadow-lg shadow-indigo-500/10' 
-                            : 'bg-slate-900 border-slate-800 hover:border-slate-700'
-                        }`}
-                      >
-                        <div className="flex justify-between items-start mb-3">
-                          <div>
-                            <h3 className="font-bold text-lg group-hover:text-indigo-400 transition-colors">
-                              {pairKey.replace('_otc', '-OTC')}
-                            </h3>
-                            <div className="flex items-center gap-2 mt-1">
-                              <span className={`text-xs px-2 py-0.5 rounded-full font-bold ${
-                                market.direction === '🟢' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'
-                              }`}>
-                                {market.direction === '🟢' ? 'BULLISH' : 'BEARISH'}
-                              </span>
-                              <span className="text-xs text-slate-500">{market.payout}% Payout</span>
-                            </div>
-                          </div>
-                          <div className="text-right">
-                            <div className="text-xl font-mono font-bold text-white">
-                              {market.price.toFixed(5)}
-                            </div>
-                          </div>
-                        </div>
-
-                        {signal && (
-                          <div className={`mt-3 p-3 rounded-xl flex items-center justify-between border ${
-                            signal.signal.includes('CALL') ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 
-                            signal.signal.includes('PUT') ? 'bg-red-500/10 border-red-500/20 text-red-400' : 'bg-slate-800 border-slate-700 text-slate-500'
-                          }`}>
-                            <div className="flex items-center gap-2">
-                              {signal.signal.includes('CALL') ? <TrendingUp size={16} /> : 
-                               signal.signal.includes('PUT') ? <TrendingDown size={16} /> : <Activity size={16} />}
-                              <span className="text-sm font-bold">{signal.signal}</span>
-                            </div>
-                            <div className="text-right">
-                              <div className="text-[10px] font-bold opacity-60 uppercase tracking-wider">
-                                {countdown < 5 ? 'NEW SIGNAL SOON' : 'CONFIDENCE'}
-                              </div>
-                              <div className="text-sm font-bold font-mono">{signal.confidence}%</div>
-                            </div>
-                          </div>
-                        )}
-                      </motion.div>
-                    );
-                  })}
-                </AnimatePresence>
-              </div>
-
+            <div className="grid grid-cols-1 gap-8">
               {/* Chart and Details */}
-              <div className="lg:col-span-2 space-y-6">
+              <div className="space-y-6">
                 {selectedPair ? (
                   <motion.div
                     initial={{ opacity: 0, scale: 0.98 }}
