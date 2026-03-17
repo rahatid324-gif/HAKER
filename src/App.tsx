@@ -1,7 +1,6 @@
-import React, { useEffect, useState, useRef, useMemo } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { io, Socket } from 'socket.io-client';
-import { createChart, IChartApi, ISeriesApi, CandlestickSeries } from 'lightweight-charts';
-import { Search, TrendingUp, TrendingDown, Zap, Activity, BarChart3, Clock, ChevronDown } from 'lucide-react';
+import { Search, TrendingUp, TrendingDown, Zap, Activity, BarChart3, Clock, Volume2, VolumeX } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 interface MarketData {
@@ -24,15 +23,23 @@ const App: React.FC = () => {
   const [marketData, setMarketData] = useState<Record<string, MarketData>>({});
   const [aiSignals, setAiSignals] = useState<Record<string, AISignal>>({});
   const [searchTerm, setSearchTerm] = useState('');
-  const [selectedPair, setSelectedPair] = useState<string | null>(null);
-  const chartContainerRef = useRef<HTMLDivElement>(null);
-  const chartRef = useRef<IChartApi | null>(null);
-  const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
 
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isVoiceEnabled, setIsVoiceEnabled] = useState(false);
 
   const [countdown, setCountdown] = useState(60);
+
+  const speakSignal = (pair: string, signal: string) => {
+    if (!isVoiceEnabled) return;
+    const pairName = pair.replace('_otc', '').toUpperCase();
+    const direction = signal.includes('CALL') ? 'Call' : signal.includes('PUT') ? 'Put' : '';
+    if (!direction) return;
+
+    const utterance = new SpeechSynthesisUtterance(`${pairName} ${direction}`);
+    utterance.rate = 1;
+    window.speechSynthesis.speak(utterance);
+  };
 
   const calculateSignal = (candles: any[][]): AISignal => {
     if (candles.length < 5) return { signal: 'WAIT', confidence: 0, expires: 0, strength: 'LOW' };
@@ -236,80 +243,15 @@ const App: React.FC = () => {
     }, 8000);
 
     return () => {
-      clearTimeout(safetyTimer);
+      if (safetyTimer) clearTimeout(safetyTimer);
       newSocket.disconnect();
     };
   }, []);
 
-  useEffect(() => {
-    if (!selectedPair || !chartContainerRef.current) return;
-
-    // Clean up any existing chart before creating a new one
-    if (chartRef.current) {
-      chartRef.current.remove();
-      chartRef.current = null;
-    }
-
-    const chart = createChart(chartContainerRef.current, {
-      layout: {
-        background: { color: '#0f172a' },
-        textColor: '#94a3b8',
-      },
-      grid: {
-        vertLines: { color: '#1e293b' },
-        horzLines: { color: '#1e293b' },
-      },
-      width: chartContainerRef.current.clientWidth,
-      height: 400,
-    });
-
-    // Use the modern addSeries API
-    const series = chart.addSeries(CandlestickSeries, {
-      upColor: '#10b981',
-      downColor: '#ef4444',
-      borderVisible: false,
-      wickUpColor: '#10b981',
-      wickDownColor: '#ef4444',
-    });
-
-    chartRef.current = chart;
-    seriesRef.current = series;
-
-    const handleResize = () => {
-      if (chartContainerRef.current && chartRef.current) {
-        chartRef.current.applyOptions({ width: chartContainerRef.current.clientWidth });
-      }
-    };
-
-    window.addEventListener('resize', handleResize);
-
-    return () => {
-      window.removeEventListener('resize', handleResize);
-      if (chartRef.current) {
-        chartRef.current.remove();
-        chartRef.current = null;
-      }
-      seriesRef.current = null;
-    };
-  }, [selectedPair]);
-
-  useEffect(() => {
-    if (selectedPair && seriesRef.current && marketData[selectedPair]) {
-      const formattedData = marketData[selectedPair].candles.map(c => ({
-        time: c[0] as any,
-        open: c[1],
-        high: c[2],
-        low: c[3],
-        close: c[4],
-      }));
-      seriesRef.current.setData(formattedData);
-    }
-  }, [selectedPair, marketData]);
-
   const filteredPairs = useMemo(() => {
     return Object.keys(marketData).filter(pair => 
       pair.toLowerCase().includes(searchTerm.toLowerCase())
-    );
+    ).sort();
   }, [marketData, searchTerm]);
 
   const handleTrade = (pair: string, signal: string) => {
@@ -323,72 +265,84 @@ const App: React.FC = () => {
       const seconds = now.getSeconds();
       setCountdown(60 - seconds);
 
-      // If countdown just reset and socket is not connected, simulate a new candle
-      if (seconds === 0 && (!socket || !socket.connected)) {
-        setMarketData(prev => {
-          const next = { ...prev };
-          Object.keys(next).forEach(pair => {
-            const candles = [...next[pair].candles];
-            const last = candles[candles.length - 1];
-            
-            // Simulate a new candle based on the last one
-            const time = Math.floor(Date.now() / 1000);
-            const open = last[4];
-            const volatility = open * 0.001;
-            const close = open + (Math.random() - 0.5) * volatility;
-            const high = Math.max(open, close) + Math.random() * (volatility * 0.2);
-            const low = Math.min(open, close) - Math.random() * (volatility * 0.2);
-            
-            candles.push([time, open, high, low, close, 100]);
-            if (candles.length > 100) candles.shift();
-            
-            const signalInfo = calculateSignal(candles);
-            next[pair] = {
-              ...next[pair],
-              candles,
-              price: close,
-              direction: close > open ? '🟢' : '🔴'
-            };
-            
-            setAiSignals(prevSignals => ({
-              ...prevSignals,
-              [pair]: signalInfo
-            }));
-          });
-          return next;
+      // If countdown just reset, announce signals for all pairs
+      if (seconds === 0) {
+        Object.keys(aiSignals).forEach(pair => {
+          const signal = aiSignals[pair];
+          if (signal && signal.signal !== 'WAIT') {
+            speakSignal(pair, signal.signal);
+          }
         });
+
+        // If socket is not connected, simulate a new candle
+        if (!socket || !socket.connected) {
+          setMarketData(prev => {
+            const next = { ...prev };
+            Object.keys(next).forEach(pair => {
+              const candles = [...next[pair].candles];
+              const last = candles[candles.length - 1];
+              
+              const time = Math.floor(Date.now() / 1000);
+              const open = last[4];
+              const volatility = open * 0.001;
+              const close = open + (Math.random() - 0.5) * volatility;
+              const high = Math.max(open, close) + Math.random() * (volatility * 0.2);
+              const low = Math.min(open, close) - Math.random() * (volatility * 0.2);
+              
+              candles.push([time, open, high, low, close, 100]);
+              if (candles.length > 100) candles.shift();
+              
+              const signalInfo = calculateSignal(candles);
+              next[pair] = {
+                ...next[pair],
+                candles,
+                price: close,
+                direction: close > open ? '🟢' : '🔴'
+              };
+              
+              setAiSignals(prevSignals => ({
+                ...prevSignals,
+                [pair]: signalInfo
+              }));
+            });
+            return next;
+          });
+        }
       }
     }, 1000);
     return () => clearInterval(interval);
-  }, [socket, marketData]);
-
-  useEffect(() => {
-    if (!selectedPair && Object.keys(marketData).length > 0) {
-      setSelectedPair(Object.keys(marketData)[0]);
-    }
-  }, [marketData, selectedPair]);
+  }, [socket, marketData, aiSignals, isVoiceEnabled]);
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-200 font-sans selection:bg-indigo-500/30">
+    <div className="min-h-screen bg-[#050505] text-slate-200 font-sans selection:bg-indigo-500/30">
       {/* Header */}
-      <header className="border-b border-slate-800 bg-slate-900/50 backdrop-blur-md sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-500/20">
-              <Zap className="text-white fill-white" size={24} />
+      <header className="sticky top-0 z-50 bg-[#050505]/80 backdrop-blur-xl border-b border-white/5">
+        <div className="max-w-7xl mx-auto px-4 h-20 flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <div className="w-10 h-10 bg-gradient-to-br from-indigo-500 to-violet-600 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-500/20">
+              <Zap className="text-white" size={24} fill="currentColor" />
             </div>
-            <h1 className="text-xl font-bold bg-gradient-to-r from-white to-slate-400 bg-clip-text text-transparent">
-              Finorix AI REAL OTC
+            <h1 className="text-2xl font-black tracking-tighter text-white">
+              FINORIX <span className="text-indigo-500">AI</span>
             </h1>
           </div>
           <div className="flex items-center gap-4">
+            <button 
+              onClick={() => setIsVoiceEnabled(!isVoiceEnabled)}
+              className={`flex items-center gap-2 px-4 py-2 rounded-full border transition-all ${
+                isVoiceEnabled 
+                  ? 'bg-indigo-500/10 border-indigo-500/50 text-indigo-400' 
+                  : 'bg-slate-800 border-slate-700 text-slate-500'
+              }`}
+            >
+              {isVoiceEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}
+              <span className="text-xs font-bold uppercase tracking-wider">
+                {isVoiceEnabled ? 'Voice ON' : 'Voice OFF'}
+              </span>
+            </button>
             <div className="flex items-center gap-2 px-3 py-1.5 bg-indigo-500/10 rounded-full border border-indigo-500/30">
               <Clock size={14} className="text-indigo-400" />
-              <span className="text-xs font-bold text-indigo-400">NEXT SIGNAL: {countdown}s</span>
-            </div>
-            <div className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-slate-800 rounded-full border border-slate-700">
-              <Activity size={14} className="text-emerald-400 animate-pulse" />
-              <span className="text-xs font-medium text-slate-400">REAL-TIME PRODUCTION FEED</span>
+              <span className="text-xs font-bold text-indigo-400">NEXT: {countdown}s</span>
             </div>
           </div>
         </div>
@@ -412,106 +366,106 @@ const App: React.FC = () => {
           </div>
         ) : (
           <>
-            <div className="flex items-center gap-4">
-              <div className="relative">
-                <select
-                  value={selectedPair || ''}
-                  onChange={(e) => setSelectedPair(e.target.value)}
-                  className="bg-slate-900 border border-slate-800 rounded-xl py-2 pl-4 pr-10 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 appearance-none font-bold text-indigo-400"
-                >
-                  {filteredPairs.map(pair => (
-                    <option key={pair} value={pair}>{pair.replace('_otc', '-OTC')}</option>
-                  ))}
-                </select>
-                <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" size={16} />
-              </div>
-              <div className="relative flex-1 max-w-xs hidden md:block">
-                <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={16} />
+            <div className="flex flex-col md:flex-row items-center gap-4 mb-8">
+              <div className="relative flex-1 w-full">
+                <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={18} />
                 <input
                   type="text"
-                  placeholder="Search pairs..."
-                  className="w-full bg-slate-900 border border-slate-800 rounded-xl py-2 pl-10 pr-4 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 transition-all text-sm"
+                  placeholder="Search pairs (BRL, PKR, BDT...)"
+                  className="w-full bg-slate-900/50 border border-white/5 rounded-2xl py-4 pl-12 pr-4 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 transition-all text-lg"
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                 />
               </div>
-              <div className="flex gap-2">
-                 <div className="px-4 py-2 bg-slate-900 rounded-xl border border-slate-800 flex items-center gap-2 whitespace-nowrap">
-                   <BarChart3 size={16} className="text-indigo-400" />
-                   <span className="text-sm">REAL OTC Data</span>
+              <div className="flex gap-2 w-full md:w-auto">
+                 <div className="flex-1 md:flex-none px-6 py-4 bg-slate-900/50 rounded-2xl border border-white/5 flex items-center justify-center gap-3">
+                   <Activity size={20} className="text-emerald-400 animate-pulse" />
+                   <span className="text-sm font-bold tracking-wide uppercase opacity-70">LIVE FEED</span>
                  </div>
               </div>
             </div>
 
-            <div className="grid grid-cols-1 gap-8">
-              {/* Chart and Details */}
-              <div className="space-y-6">
-                {selectedPair ? (
-                  <motion.div
-                    initial={{ opacity: 0, scale: 0.98 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    className="bg-slate-900 border border-slate-800 rounded-3xl p-6 overflow-hidden"
-                  >
-                    <div className="flex items-center justify-between mb-6">
-                      <div className="flex items-center gap-4">
-                        <h2 className="text-2xl font-bold">{selectedPair.replace('_otc', '-OTC')}</h2>
-                        <div className="flex items-center gap-2 text-slate-400 text-sm">
-                          <Clock size={14} />
-                          <span>1M Timeframe</span>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              <AnimatePresence mode="popLayout">
+                {filteredPairs.map((pairKey) => {
+                  const market = marketData[pairKey];
+                  const signal = aiSignals[pairKey];
+
+                  return (
+                    <motion.div
+                      key={pairKey}
+                      layout
+                      initial={{ opacity: 0, scale: 0.9 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={{ opacity: 0, scale: 0.9 }}
+                      className="p-6 rounded-3xl bg-slate-900/40 border border-white/5 hover:border-indigo-500/30 transition-all group relative overflow-hidden"
+                    >
+                      <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-500/5 blur-3xl rounded-full -mr-16 -mt-16 group-hover:bg-indigo-500/10 transition-all" />
+                      
+                      <div className="flex justify-between items-start mb-6 relative z-10">
+                        <div>
+                          <h3 className="font-black text-xl tracking-tight text-white mb-1">
+                            {pairKey.replace('_otc', '').toUpperCase()}
+                            <span className="text-indigo-500/50 text-sm ml-1">OTC</span>
+                          </h3>
+                          <div className="flex items-center gap-2">
+                            <span className={`text-[10px] px-2 py-0.5 rounded-md font-black tracking-widest uppercase ${
+                              market.direction === '🟢' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'
+                            }`}>
+                              {market.direction === '🟢' ? 'UP' : 'DOWN'}
+                            </span>
+                            <span className="text-[10px] font-bold text-slate-500 tracking-widest uppercase">{market.payout}% PAYOUT</span>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-2xl font-black font-mono text-white tracking-tighter">
+                            {market.price.toFixed(5)}
+                          </div>
                         </div>
                       </div>
-                      <button
-                        onClick={() => handleTrade(selectedPair, aiSignals[selectedPair]?.signal || 'CALL')}
-                        className="px-8 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold shadow-lg shadow-indigo-500/20 transition-all active:scale-95"
-                      >
-                        EXECUTE TRADE
-                      </button>
-                    </div>
 
-                    <div ref={chartContainerRef} className="w-full rounded-2xl overflow-hidden border border-slate-800" />
-
-                    <div className="grid grid-cols-3 gap-4 mt-6">
-                      <div className="p-4 bg-slate-800/50 rounded-2xl border border-slate-700">
-                        <div className="text-xs text-slate-500 uppercase font-bold mb-1">AI Confidence</div>
-                        <div className="text-xl font-bold text-indigo-400">{aiSignals[selectedPair]?.confidence}%</div>
-                      </div>
-                      <div className="p-4 bg-slate-800/50 rounded-2xl border border-slate-700">
-                        <div className="text-xs text-slate-500 uppercase font-bold mb-1">Signal Strength</div>
-                        <div className="text-xl font-bold text-amber-400">{aiSignals[selectedPair]?.strength}</div>
-                      </div>
-                      <div className="p-4 bg-slate-800/50 rounded-2xl border border-slate-700">
-                        <div className="text-xs text-slate-500 uppercase font-bold mb-1">Market Status</div>
-                        <div className="text-xl font-bold text-emerald-400">OPEN</div>
-                      </div>
-                    </div>
-                  </motion.div>
-                ) : (
-                  <div className="h-full min-h-[500px] flex flex-col items-center justify-center bg-slate-900/50 border border-dashed border-slate-800 rounded-3xl text-slate-500">
-                    <BarChart3 size={48} className="mb-4 opacity-20" />
-                    <p className="text-lg">Select a pair to view real-time analysis</p>
-                  </div>
-                )}
-              </div>
+                      {signal && (
+                        <div className={`p-4 rounded-2xl flex flex-col gap-3 border relative z-10 ${
+                          signal.signal.includes('CALL') ? 'bg-emerald-500/5 border-emerald-500/20' : 
+                          signal.signal.includes('PUT') ? 'bg-red-500/5 border-red-500/20' : 'bg-slate-800/50 border-white/5'
+                        }`}>
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              {signal.signal.includes('CALL') ? <TrendingUp size={20} className="text-emerald-400" /> : 
+                               signal.signal.includes('PUT') ? <TrendingDown size={20} className="text-red-400" /> : <Activity size={20} className="text-slate-500" />}
+                              <span className={`font-black text-lg tracking-tight ${
+                                signal.signal.includes('CALL') ? 'text-emerald-400' : 
+                                signal.signal.includes('PUT') ? 'text-red-400' : 'text-slate-500'
+                              }`}>
+                                {signal.signal}
+                              </span>
+                            </div>
+                            <div className="flex flex-col items-end">
+                              <span className="text-[9px] font-black opacity-40 uppercase tracking-[0.2em]">Confidence</span>
+                              <span className="font-black text-lg text-white">{signal.confidence}%</span>
+                            </div>
+                          </div>
+                          
+                          <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden">
+                            <motion.div 
+                              initial={{ width: 0 }}
+                              animate={{ width: `${signal.confidence}%` }}
+                              className={`h-full rounded-full ${
+                                signal.signal.includes('CALL') ? 'bg-emerald-500' : 
+                                signal.signal.includes('PUT') ? 'bg-red-500' : 'bg-slate-500'
+                              }`}
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </motion.div>
+                  );
+                })}
+              </AnimatePresence>
             </div>
           </>
         )}
       </main>
-
-      <style>{`
-        .custom-scrollbar::-webkit-scrollbar {
-          width: 6px;
-        }
-        .custom-scrollbar::-webkit-scrollbar-track {
-          background: transparent;
-        }
-        .custom-scrollbar::-webkit-scrollbar-thumb {
-          background: #1e293b;
-          border-radius: 10px;
-        }
-        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-          background: #334155;
-        }
-      `}</style>
     </div>
   );
 };
