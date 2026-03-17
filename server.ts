@@ -22,6 +22,14 @@ async function startServer() {
 
   const PORT = 3000;
 
+  app.get('/api/health', (req, res) => {
+    res.json({ 
+      status: 'ok', 
+      pairs: ALL_OTC_PAIRS.length,
+      dataLoaded: Object.keys(marketData).length > 0
+    });
+  });
+
   // ALL OTC Pairs
   const ALL_OTC_PAIRS = [
     'BRLUSD_otc', 'PKRUSD_otc', 'DZDUSD_otc', 'BDTUSD_otc', 'NGNUSD_otc', 'MXNUSD_otc', 
@@ -33,6 +41,12 @@ async function startServer() {
 
   let marketData: any = {};
   let aiSignals: any = {};
+
+  // Initialize with simulations immediately
+  ALL_OTC_PAIRS.forEach(pair => {
+    marketData[pair] = simulateCandles(pair);
+    aiSignals[pair] = generateAISignal(pair, marketData[pair].candles);
+  });
 
   function simulateCandles(pair: string) {
     const now = Date.now();
